@@ -1,0 +1,179 @@
+---
+name: efx-render-type-selection
+description: |
+  当用户要为特效选择渲染类型、或遇到"某些轴/某些参数填了却没反应"这类能力边界问题时使用。给出三问选型法（正对摄像机 / 挂模型 / 海量粒子），并逐条列出每种类型的已知代价，以及 Linked 与 Embedded 的取舍。不适用于：已知类型、只想问值怎么填（用 efx-numeric-semantics）、要换模型资源本身（用 efx-model-chain）、要换贴图（用 efx-texture-chain）。
+metadata:
+  cangjie.generated-by: cangjie-tools v2.5.0
+  cangjie.capability-id: cap.dmc5-efx-modding.efx-render-type-selection
+  cangjie.capability-revision: 1
+  cangjie.bundle-id: bundle.dmc5-efx-modding
+  cangjie.source-title: 鬼泣5 EFX 特效文件手工编辑（RE Engine / 010 Editor 模板）
+  cangjie.tags: selection, rendering, trade-off, high
+---
+# EFX 渲染类型选型
+
+## R — 原文 (Reading)
+
+> 使纹理特效或序列顿动画永远面对摄像机（屏幕）。
+
+— 视频分 P 16《属性：Type Billboard 3D》[00:06]（画面文字 OCR）
+
+> 它不会一直面向摄像机，只是它不面相摄像机，可以三个轴旋转。
+
+— 视频分 P 17《属性：Type Polygon》[00:06]（画面文字 OCR）
+
+> 需要大量粒子的时候请使用这个……缺点：即使配合 ScaleAnim 也无法在 X、Y 轴单独缩放。
+
+— 视频分 P 21《属性：Type Gpu Billboard》[00:06] + 原教程 §4（OCR 文本 + 原教程文本）
+
+> 选择 Linked 或 Embedded EFX（推荐用 Linked）。
+
+— 原教程 §6「操作三」（thezippotm 原教程文本）
+
+---
+
+## I — 方法论骨架 (Interpretation)
+
+特效"长什么样"由 **Type\* 渲染段**决定。这是 EFX 里最需要一次性想清楚的选择——因为它决定了一整套能力边界，选完就得连带接受它的限制。判断顺序是**三个问题**，问完答案唯一：
+
+**第一问：它要不要永远正对摄像机？**
+- **要** → `TypeBillboard3D`。代价：**只能单轴旋转**（因为它始终朝屏幕，没有稳定的第二、三轴）。
+- **不要、要能三轴自由翻转** → `TypePolygon`。代价：不朝摄像机时斜看会"薄"，且**默认半透明渲染**（p03 实测，圆形纹理同样如此）。
+- **海量粒子、追求性能** → `TypeGpuBillboard`。代价：**即使配 ScaleAnim 也无法在 X/Y 轴单独缩放**——这是最常踩的坑，且不报错、只表现为"参数填了没反应"。
+
+**第二问：要不要挂外部网格模型？**
+- **要** → `TypeMesh`（配 mdf + fbx）。注意它只认 mdf 的**第一个材质**，材质名对不上不用管；换外观得去 mdf 里改贴图。
+- 若还要"按网格顶点撒粒子" → `MeshEmitter`，而它**目前只支持 `TypeGpuBillboard`**，换成别的类型不生效。
+
+**第三问：这个特效引用另一个 efx，用哪种方式？**
+- **优先 `Linked`（外链）**。它与 `Embedded`（内嵌）功能等价，差别只在维护成本：Embedded 每次改体积都要同步 `Path/EFX size`，是一个高频、易忘、且改的地方与被改位置相隔很远的高危耦合。除非有强制内嵌的理由，一律选 Linked。
+
+一句话概括：**选型的本质是"功能 ↔ 代价"的交换**。不要问"哪个最好"，要问"我能不能接受它的限制"。
+
+（附一条相关的颜色入口纪律：改特效颜色**不要去 colorcodes 节点改**——它是跨特效组共享的映射，改它可能波及其他组；应到对应**类型段内部展开的颜色/亮度栏**改。）
+
+---
+
+## A1 — 源素材中的应用 (Past Application)
+
+### 案例 1：换成彩色贴图后观察到 Polygon 的半透明
+
+- **问题**：替换彩色贴图后想确认渲染表现是否正常。
+- **方法的使用**：在 p03 里换完彩色贴图（并同步改了 tex_light）后进游戏观察。
+- **结论**：**TypePolygon 类型的纹理在游戏内是半透明的**——这是类型本身的默认渲染特性，不是贴图坏了。
+- **结果**：这条表现被记下来，成为"选 Polygon 就得接受半透明"的先验认知。
+
+### 案例 2：静态网格 vs 顶点动画的判据
+
+- **问题**：用一个 3DS Max 导出的齿轮模型替换特效里的网格。
+- **方法的使用**：选 `TypeMesh`，摆好位置、只选模型（不选父级）改名导出 FBX；回 010 Editor 执行模板替换。
+- **结论**：`FrameCount` 在**静态网格填 1**，多子网格则被引擎当作顶点动画、看网格数。
+- **结果**：进游戏成功显示替换后的静态网格。
+
+### 案例 3：海量粒子选 GpuBillboard 与 MeshEmitter
+
+- **问题**：需要极大量粒子，同时希望粒子按某个形状分布。
+- **方法的使用**：主类型用 `TypeGpuBillboard`，并把亮度调到 500 以上（单位疑似 nits，太低看不见）；然后用 `MeshEmitter` 让粒子按网格顶点分布。
+- **结论**：MeshEmitter **只能配 GpuBillboard**；生成位置完全由网格顶点分布决定。
+- **结果**：在 3DS Max 里对比了两种顶点分布方式，确认顶点疏密直接决定粒子疏密。
+
+---
+
+## A2 — 触发场景 (Future Trigger) ★
+
+### 用户会在什么情境下需要这个 skill？
+
+1. 想给特效选一个**渲染方式**（"这个特效想让它一直朝着我""想要粒子能翻转"），在 Billboard / Polygon / Mesh 之间犹豫。
+2. **填了参数却没反应**：给某个类型配了 ScaleAnim 的 X/Y 轴缩放、或配了旋转，结果部分轴无效——需要判断是不是类型本身的限制。
+3. 想让特效**挂一个自己做好的模型/网格**，不确定该用哪个类型、要不要配 mdf/fbx。
+4. 需要**极大量粒子**，在"性能"和"自由度"之间取舍。
+5. 在 `Linked` 与 `Embedded` 之间选择，或想确认"为什么改体积老是崩"。
+6. 想改特效**颜色/亮度**，不确定该进哪一层改（尤其是看到 colorcodes）。
+
+### 语言信号（用户的话里出现这些就应激活）
+
+- 中文：「特效要不要一直朝摄像机」「怎么让它面向我」「能不能三轴旋转」「为什么 X/Y 轴缩放没反应」「填了没用」「想换个模型上去」「粒子太多卡」「Linked 还是 Embedded」「改颜色在哪改」「GpuBillboard」
+- English: "should this billboard to camera", "why can't I scale on X/Y", "polygon vs billboard", "linked or embedded efx", "replace the mesh", "gpu billboard particles", "where do I change the color"
+
+### 与相邻能力的区分
+
+- 与 `efx-attribute-selection` 的区别：本能力决定"**用哪一类渲染段**（形态/能力边界）"；那个回答"**改某个需求去哪个段**（位置/时长/散布等）"。前者选容器，后者选内容。
+- 与 `efx-numeric-semantics` 的区别：本能力管"**能力边界**"（GpuBillboard 不支持逐轴缩放这类结构性限制）；那个管"**数值域边界**"（填多少、什么单位、为什么崩）。"填了没反应"若是因为类型不支持，找本能力。
+- 与 `efx-model-chain` 的区别：本能力只决定"用不用 TypeMesh"；一旦确定要换模型，具体走 mdf+fbx 链路的动作找那个。
+- 与 `efx-texture-chain` 的区别：本能力涉及的是"渲染段类型"；贴图/序列帧的引用链改造找那个。
+
+---
+
+## E — 可执行步骤 (Execution)
+
+1. **列需求，问三问**：
+   - ① 需不需要永远朝摄像机？要 → Billboard3D；要三轴翻转 → Polygon；海量粒子 → GpuBillboard。要挂模型 → TypeMesh。
+   - ② 要不要按网格顶点撒粒子？要 → MeshEmitter（只能配 GpuBillboard）。
+   - ③ 要不要引用别的 efx？要 → 优先 Linked。
+   - 完成标准：写下选定的类型名，以及**它的一条代价**。
+
+2. **查该类型的已知限制，确认需求不被它挡掉**：
+   - Billboard3D → 只能单轴旋转（要三轴旋转就别选它）。
+   - Polygon → 默认半透明（斜看变薄）。
+   - GpuBillboard → 不能 X/Y 轴单独缩放；亮度建议 ≥ 500。
+   - TypeMesh → 只用 mdf 第一个材质，材质名不重要；改外观去 mdf。
+   - MeshEmitter → 仅支持 TypeGpuBillboard；顶点必须均匀。
+   - 完成标准：若任何一条限制与需求冲突 → **回步骤 1 换类型**，不要试图靠调参数绕过。
+   - 判停条件：若"参数填了没反应"且命中了上表某条限制 → 直接判定为类型能力边界，停止加数值。
+
+3. **处理引用方式与颜色入口**：
+   - 引用 efx：选 Linked（除非必须内嵌）。
+   - 改颜色/亮度：**不使用 colorcodes**，到该类型段内部展开的颜色栏改。
+   - 完成标准：明确写出"用 Linked / 用类型段内颜色栏"。
+
+4. **填参数 → F5 重解析 → 进游戏验证**。
+   - 完成标准：表现的形态、朝向、缩放行为与选型预期一致。
+   - 判停条件：若换序列帧类资源后重进关卡不刷新，退到主界面重新选关再进（见 `efx-crash-troubleshoot`）。
+
+---
+
+## B — 边界 (Boundary) ★
+
+### 不要在以下情况使用此 skill
+
+- 需求已经明确到"**填多少数值**"了 → 用 `efx-numeric-semantics`。
+- 只是想把某个已知需求映射到某个属性段（不涉及渲染形态） → 用 `efx-attribute-selection`。
+- 已经确定 TypeMesh 且要动模型资源本身 → 用 `efx-model-chain`。
+
+### 源素材中警告的失败模式
+
+- **给 GpuBillboard 填 X/Y 不同的缩放值** → 只有一个轴生效，另一个完全无反应；且不报错，容易被误判为"值太小"而反复加大。
+- **对 Billboard3D 期待三轴旋转** → 它永远朝摄像机，做不到。
+- **选 Embedded 后又频繁改体积** → 每次都要同步 Path/EFX size，漏改即错位；作者明确因此推荐 Linked。
+- **在 colorcodes 里改颜色** → 这是跨组共享的映射，可能把别的特效组一起改了。
+- **以为"材质名对不上"是问题** → TypeMesh 只用 mdf 第一个材质，材质名被忽略。
+- **MeshEmitter 配了非 GpuBillboard 的类型** → 不生效。
+
+### 作者的盲点 / 局限
+
+- 作者演示过的类型以本教程涉及的那几种为主；**同族其它 Type\*（如 TypeRibbonFollow 等）只被提及未展开**，本能力不外推它们的限制。
+- "GpuBillboard 亮度单位可能是 nits"是作者的推测（"可能"），500 是经验阈值不是规范值。
+- 只验证了 DMC5 这一版引擎；RE2/RE4/MHR 是否同规则**无素材证据**，不得外推。
+
+### 容易混淆的邻近方法
+
+- **渲染类型（Type\*） vs 属性段（Life/Transform/Spawn…）**：前者决定"长什么样、有什么限制"，后者决定"在哪、多久、怎么动"。
+- **"类型不支持" vs "数值填错"**：前者是能力边界（本能力），后者是数值域（`efx-numeric-semantics`）。判断线索：如果**某几个轴无效而另几个正常**，是类型边界；如果**整体表现离谱**，是数值域。
+- **Linked vs Embedded**：功能等价，只在维护成本上分岔。
+
+---
+
+## 相关能力
+
+- 需求映射：`efx-attribute-selection`
+- 数值与单位：`efx-numeric-semantics`
+- 模型链路：`efx-model-chain`
+- 贴图链路：`efx-texture-chain`
+
+---
+
+## 审计信息
+
+- **验证通过**：V1 ✓（四种类型各自独立讲解并各给代价，再加 Linked/Embedded 第五个独立对照）/ V2 ✓（推导"地面铺开 + 三轴翻转 + 逐轴拉伸"必须排除 Billboard3D 与 GpuBillboard，落到 Polygon）/ V3 ✓（把限制具体化并配代价：只单轴、不能逐轴缩放、只用第一个材质）
+- **合并候选**：f07, f10, p21, p24, p25, ce15, ce20
+- **蒸馏时间**：2026-10-04
